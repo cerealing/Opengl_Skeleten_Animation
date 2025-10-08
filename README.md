@@ -6,7 +6,7 @@
 学会了它，你就能导入从网上下载的模型、动画，马上就能在程序中看到效果。
 但是你如果想要自己的模型你可以往下看，如果你只专注于程序可以止步。
 
-![gif](readme.assets/GIF 2025-10-8 21-11-17.gif)
+![gif](readme.assets/walk.gif)
 ## part2
 教你如何在blender中给模型绑定骨骼
 ## part2
