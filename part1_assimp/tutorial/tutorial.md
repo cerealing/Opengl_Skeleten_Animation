@@ -8,10 +8,27 @@
 
 3. 程序插值：在计算机程序中（建模软件或者opengl）实现：在每个关键帧中平滑地插入更多关键帧，让动画更流畅。
 
-<div align="center">
-    <img src="tutorial.assets/poses.gif" style="height: 200px;"> 
-    <img src="tutorial.assets/interpolating.gif" style="height: 200px;">
-</div>
-
+<table align="center">
+  <tr>
+    <td style="padding-right:100px;">
+      <img src="tutorial.assets/poses.gif" style="height:200px;">
+    </td>
+    <td>
+      <img src="tutorial.assets/interpolating.gif" style="height:200px;">
+    </td>
+  </tr>
+</table>
 
 插帧通过根据比例调整前后关键帧中相同骨骼的位移、旋转、缩放实现：
+
+<div align="center">
+    <img src="tutorial.assets/scale_factor.png" alt="img">
+</div>
+
+factor=current/diff就是当前要插值的帧在前后两个关键帧的比例位置，currentTime越靠近前一个关键帧factor就越小，越靠近后一个关键帧fctor就越大，我们使用线性插值函数作用前后的位移矩阵和缩放矩阵：
+
+<p align="center"> newMat=lastMat*(1-factor)+nextMat*factor</p>
+
+但是对于旋转矩阵应用这个公式就会出现奇怪的问题，我们采用四元数的球面插值来控制旋转
+
+4. 渲染：我们拿到骨骼插值后的变换矩阵，对顶点变换使顶点随骨骼同步运动，最后把顶点丢到渲染管线当中渲染出动画
