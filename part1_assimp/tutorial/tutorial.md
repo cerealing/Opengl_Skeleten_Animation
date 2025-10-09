@@ -8,7 +8,7 @@
 
 3. 程序插值：在计算机程序中（建模软件或者opengl）实现：在每个关键帧中平滑地插入更多关键帧，让动画更流畅。
 
-<div style="display: flex; justify-content: center; gap: 20px;">
+<div align="center">
     <img src="tutorial.assets/poses.gif" style="height: 200px;"> 
     <img src="tutorial.assets/interpolating.gif" style="height: 200px;">
 </div>
