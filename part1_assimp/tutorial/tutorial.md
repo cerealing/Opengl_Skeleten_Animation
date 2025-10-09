@@ -10,7 +10,7 @@
 
 <div style="display: flex; justify-content: center; gap: 20px;">
     <img src="tutorial.assets/poses.gif" style="height: 200px;"> 
-    <img src="tutorial.assets/interpeolating.gif" style="height: 200px;">
+    <img src="tutorial.assets/interpolating.gif" style="height: 200px;">
 </div>
 
 
