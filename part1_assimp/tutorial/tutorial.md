@@ -84,3 +84,203 @@ void loadModel(string const& path)
 ```
 
 `meshes.push_back(processMesh(mesh, scene));`处理mesh，把aiMesh的顶点，法线，纹理坐标这些数据拿到我们自己的mesh中，（aiMesh里面有了，我们还要再组织成我们程序能处理的格式。能不能直接渲染assimp里面的数据？当然可以哈哈，不过实现难度大，生命周期由assimp控制，结构不易掌控后期优化难度大）
+
+我们先来看我们如何组织我们自己的mesh：
+
+```cpp
+#pragma once
+
+#include <glad/glad.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include "shader.h"
+#include <string>
+#include <vector>
+
+using namespace std;
+
+#define MAX_BONE_INFLUENCE 4
+
+struct Vertex
+{
+	glm::vec3 Position;
+	glm::vec3 Normal;
+	glm::vec2 TexCoords;
+	glm::vec3 Tangent;
+	glm::vec3 Bitangent;
+	int m_BoneIDs[MAX_BONE_INFLUENCE];
+	float m_Weights[MAX_BONE_INFLUENCE];
+};
+
+struct Texture
+{
+	unsigned int id;
+	string type;
+	string path;
+};
+
+class Mesh
+{
+public:
+	vector<Vertex> vertices;
+	vector<unsigned int> indices;
+	vector<Texture> textures;
+	unsigned int VAO;
+
+	Mesh(vector<Vertex> vertices, vector<unsigned int> indices, vector<Texture> textures)
+	{
+		this->vertices = vertices;
+		this->indices = indices;
+		this->textures = textures;
+
+		setupMesh();
+	}
+
+	void Draw(Shader& shader)
+	{
+		unsigned int diffuseNr = 1;
+		unsigned int specularNr = 1;
+		unsigned int normalNr = 1;
+		unsigned int heightNr = 1;
+		for (unsigned int i = 0; i < textures.size(); i++)
+		{
+			glActiveTexture(GL_TEXTURE0 + i);
+
+			string number;
+			string name = textures[i].type;
+			if (name == "texture_diffuse")
+				number = std::to_string(diffuseNr++);
+			else if (name == "texture_specular")
+				number = std::to_string(specularNr++);
+			else if (name == "texture_normal")
+				number = std::to_string(normalNr++);
+			else if (name == "texture_height")
+				number = std::to_string(heightNr++);
+
+			glUniform1i(glGetUniformLocation(shader.ID, (name + number).c_str()), i);
+			glBindTexture(GL_TEXTURE_2D, textures[i].id);
+		}
+
+		glBindVertexArray(VAO);
+		glDrawElements(GL_TRIANGLES, static_cast<unsigned int>(indices.size()), GL_UNSIGNED_INT, 0);
+		glBindVertexArray(0);
+
+		glActiveTexture(GL_TEXTURE0);
+	}
+
+private:
+	unsigned int VBO, EBO;
+
+	void setupMesh()
+	{
+		glGenVertexArrays(1, &VAO);
+		glGenBuffers(1, &VBO);
+		glGenBuffers(1, &EBO);
+
+		glBindVertexArray(VAO);
+		glBindBuffer(GL_ARRAY_BUFFER, VBO);
+		glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), &vertices[0], GL_STATIC_DRAW);
+		
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), &indices[0], GL_STATIC_DRAW);
+
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, Normal));
+
+		glEnableVertexAttribArray(2);
+		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, TexCoords));
+
+		glEnableVertexAttribArray(3);
+		glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, Tangent));
+
+		glEnableVertexAttribArray(4);
+		glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, Bitangent));
+
+		glEnableVertexAttribArray(5);
+		glVertexAttribIPointer(5, 4, GL_INT, sizeof(Vertex), (void*)offsetof(Vertex, m_BoneIDs));
+
+		glEnableVertexAttribArray(6);
+		glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, m_Weights));
+
+		glBindVertexArray(0);
+	}
+};
+```
+
+我们的mesh里面包含顶点Vertex的数组vertices，材质Texture的数组textures，索引的数组indices
+
+其中顶点结构体包含位置position法线normal材质坐标texCoord切向量tangent副切向量bitangent还有**被哪些骨骼作用骨骼的索引数组m_boneIDs和对应的每个骨骼影响权重数组m_Weights**
+并且最多受到4个骨骼的影响，权重之和为1
+
+材质结构体包含材质创建时分配的id
+
+```cpp
+unsigned int textureID;
+glGenTextures(1, &textureID);
+```
+
+就是这个id
+还有纹理的类型type有漫反射镜面反射法线贴图高度图，但是简单起见我们程序只用漫反射贴图
+最后是texture的存储位置，用来唯一标记纹理避免重复加载
+
+索引数组就是opengl支持用顶点的索引来渲染
+
+我们的mesh在构造的时候调用setupmesh把顶点绑定了，在draw的时候把纹理绑定了，这是因为顶点跟vao走，但是纹理跟
+模型、mesh走，每次渲染不同的模型、mesh都会覆盖纹理
+
+了解了结构就可以来看model是如何加载他们的了
+
+```cpp
+Mesh processMesh(aiMesh* mesh, const aiScene* scene)
+{
+	vector<Vertex> vertices;
+	vector<unsigned int> indices;
+	vector<Texture> textures;
+
+	for (unsigned int i = 0; i < mesh->mNumVertices; i++)
+	{
+		Vertex vertex;
+		SetVertexBoneDataToDefault(vertex);
+		vertex.Position = AssimpGLMHelpers::GetGLMVec(mesh->mVertices[i]);
+		vertex.Normal = AssimpGLMHelpers::GetGLMVec(mesh->mNormals[i]);
+
+		if (mesh->mTextureCoords[0])
+		{
+			glm::vec2 vec;
+			vec.x = mesh->mTextureCoords[0][i].x;
+			vec.y = mesh->mTextureCoords[0][i].y;
+			vertex.TexCoords = vec;
+		}
+		else
+		{
+			vertex.TexCoords = glm::vec2(0.0f, 0.0f);
+		}
+		vertices.push_back(vertex);
+	}
+	for (unsigned int i = 0; i < mesh->mNumFaces; i++)
+	{
+		aiFace face = mesh->mFaces[i];
+		for (unsigned int j = 0; j < face.mNumIndices; j++)
+		{
+			indices.push_back(face.mIndices[j]);
+		}
+	}
+	aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+
+	vector<Texture> diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
+	textures.insert(textures.end(), diffuseMaps.begin(), diffuseMaps.end());
+	vector<Texture> specularMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_specular");
+	textures.insert(textures.end(), specularMaps.begin(), specularMaps.end());
+	std::vector<Texture> normalMaps = loadMaterialTextures(material, aiTextureType_HEIGHT, "texture_normal");
+	textures.insert(textures.end(), normalMaps.begin(), normalMaps.end());
+	std::vector<Texture> heightMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_height");
+	textures.insert(textures.end(), heightMaps.begin(), heightMaps.end());
+
+	ExtractBoneWeightForVertices(vertices, mesh, scene);
+
+	return Mesh(vertices, indices, textures);
+}
+```
