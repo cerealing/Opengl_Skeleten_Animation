@@ -1,0 +1,37 @@
+﻿  源.cpp
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\bone.h(39,20): warning C4244: “初始化”: 从“double”转换到“float”，可能丢失数据
+  (编译源文件“源.cpp”)
+  
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\bone.h(51,20): warning C4244: “初始化”: 从“double”转换到“float”，可能丢失数据
+  (编译源文件“源.cpp”)
+  
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\bone.h(62,20): warning C4244: “初始化”: 从“double”转换到“float”，可能丢失数据
+  (编译源文件“源.cpp”)
+  
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\model_animation.h(161,37): warning C4018: “<”: 有符号/无符号不匹配
+  (编译源文件“源.cpp”)
+  
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\animation.h(57,25): warning C4244: “=”: 从“double”转换到“float”，可能丢失数据
+  (编译源文件“源.cpp”)
+  
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\animation.h(58,31): warning C4244: “=”: 从“double”转换到“int”，可能丢失数据
+  (编译源文件“源.cpp”)
+  
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\animation.h(82,44): warning C4244: “return”: 从“int”转换到“float”，可能丢失数据
+  (编译源文件“源.cpp”)
+  
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\animation.h(149,21): warning C4018: “<”: 有符号/无符号不匹配
+  (编译源文件“源.cpp”)
+  
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\源.cpp(70,22): warning C4244: “初始化”: 从“double”转换到“float”，可能丢失数据
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\源.cpp(128,11): warning C4244: “=”: 从“double”转换到“float”，可能丢失数据
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\源.cpp(129,11): warning C4244: “=”: 从“double”转换到“float”，可能丢失数据
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\源.cpp(133,16): warning C4244: “初始化”: 从“double”转换到“float”，可能丢失数据
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\源.cpp(134,16): warning C4244: “初始化”: 从“double”转换到“float”，可能丢失数据
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\源.cpp(136,10): warning C4244: “=”: 从“double”转换到“float”，可能丢失数据
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\源.cpp(137,10): warning C4244: “=”: 从“double”转换到“float”，可能丢失数据
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\源.cpp(144,28): warning C4244: “参数”: 从“double”转换到“float”，可能丢失数据
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\bone.h(90,1): warning C4715: “Bone::GetPositionIndex”: 不是所有的控件路径都返回值
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\bone.h(110,1): warning C4715: “Bone::GetScaleIndex”: 不是所有的控件路径都返回值
+C:\Users\doctor\source\repos\骨骼动画\骨骼动画\bone.h(100,1): warning C4715: “Bone::GetRotationIndex”: 不是所有的控件路径都返回值
+  骨骼动画.vcxproj -> C:\Users\doctor\source\repos\骨骼动画\x64\Debug\骨骼动画.exe
