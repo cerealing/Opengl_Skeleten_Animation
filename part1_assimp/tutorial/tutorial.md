@@ -999,7 +999,7 @@ void main()
 	mat4 viewModel = view * model;
 	gl_Position = projection * viewModel * totalPosition;
 	TexCoords = tex;
-}
+} 
 ```
 
 前面说过每个顶点有相关的骨骼驱动，骨骼的变换矩阵也传进着色器了，那就对顶点应用这个矩阵，注意还要乘每个骨骼的权重，这样顶点就在骨骼的
