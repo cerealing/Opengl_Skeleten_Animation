@@ -427,6 +427,585 @@ void SetVertexBoneData(Vertex& vertex, int boneID, float weight)
 }
 ```
 
-好了现在模型和骨骼已经加载完毕了，我们要加载动画了！
+好了现在模型已经加载完毕了，我们要加载动画了
 
-骨骼造型pose决定动画，我们先看骨骼
+我们先把骨骼的层级结构读取出来
+
+```cpp
+#pragma once
+
+#include <glm/glm.hpp>
+#include <map>
+#include <vector>
+#include <assimp/scene.h>
+#include <assimp/Importer.hpp>
+#include "animation.h"
+#include "bone.h"
+#include <functional>
+#include "model_animation.h"
+#include <iostream>
+#include <stdexcept>
+#include <fstream>
+#include <glm/gtc/matrix_inverse.hpp>
+
+struct AssimpNodeData
+{
+	glm::mat4 transformation;
+	std::string name;
+	int childrenCount;
+	std::vector<AssimpNodeData> children;
+};
+
+class Animation
+{
+public:
+	Animation() = default;
+
+	Animation(const std::string& animationPath, Model* model)
+	{
+		// Check file existence first to give a clearer error
+		std::ifstream infile(animationPath);
+		if (!infile.good())
+		{
+			std::cerr << "ERROR::ASSIMP::File not found: " << animationPath << "\n";
+			throw std::runtime_error("Animation file not found: " + animationPath);
+		}
+
+		Assimp::Importer importer;
+		// Use a few common post-processing flags to help the importer
+		const aiScene* scene = importer.ReadFile(animationPath, aiProcess_Triangulate | aiProcess_CalcTangentSpace | aiProcess_JoinIdenticalVertices);
+		if (!scene || !scene->mRootNode)
+		{
+			std::string err = importer.GetErrorString();
+			std::cerr << "ERROR::ASSIMP::" << err << "\n";
+			throw std::runtime_error("Failed to load animation file: " + animationPath + " -- " + err);
+		}
+
+		if (scene->mNumAnimations == 0)
+		{
+			std::cerr << "ERROR::ASSIMP::No animations found in file: " << animationPath << "\n";
+			throw std::runtime_error("No animations present in file: " + animationPath);
+		}
+
+		auto animation = scene->mAnimations[0];
+		m_Duration = animation->mDuration;
+		m_TicksPerSecond = animation->mTicksPerSecond;
+		aiMatrix4x4 globalTransformation = scene->mRootNode->mTransformation;
+		globalTransformation = globalTransformation.Inverse();
+		ReadHierarchyData(m_RootNode, scene->mRootNode);
+		ReadMissingBones(animation, *model);
+	}
+
+	~Animation()
+	{
+
+	}
+
+	Bone* FindBone(const std::string& name)
+	{
+		auto iter = std::find_if(m_Bones.begin(), m_Bones.end(),
+			[&](const Bone & Bone)
+			{
+				return Bone.GetBoneName() == name;
+			}
+		);
+		if (iter == m_Bones.end()) return nullptr;
+		else return &(*iter);
+	}
+
+	inline float GetTicksPerSecond() { return m_TicksPerSecond; }
+	inline float GetDuration() { return m_Duration; }
+	inline const AssimpNodeData& GetRootNode() { return m_RootNode; }
+	inline const std::map<std::string, BoneInfo > & GetBoneIdMap()
+	{
+		return m_BoneInfoMap;
+	}
+
+private:
+	// Recursively find the global transform of a node by name using the cached hierarchy
+	bool TryGetGlobalTransform(const AssimpNodeData& node, const std::string& targetName, const glm::mat4& parent, glm::mat4& outGlobal)
+	{
+		glm::mat4 global = parent * node.transformation;
+		if (node.name == targetName)
+		{
+			outGlobal = global;
+			return true;
+		}
+		for (const auto& child : node.children)
+		{
+			if (TryGetGlobalTransform(child, targetName, global, outGlobal))
+				return true;
+		}
+		return false;
+	}
+
+	void ReadMissingBones(const aiAnimation* animation, Model& model)
+	{
+		int size = animation->mNumChannels;
+
+		auto& boneInfoMap = model.GetBoneInfoMap();
+		int& boneCount = model.GetBoneCount();
+
+		for (int i = 0; i < size; i++)
+		{
+			auto channel = animation->mChannels[i];
+			std::string boneName = channel->mNodeName.data;
+
+			if (boneInfoMap.find(boneName) == boneInfoMap.end())
+			{
+				// Derive a reasonable offset from the bind pose hierarchy if possible
+				glm::mat4 globalBind = glm::mat4(1.0f);
+				if (!TryGetGlobalTransform(m_RootNode, boneName, glm::mat4(1.0f), globalBind))
+				{
+					// If the node is not found in the hierarchy, leave as identity
+					globalBind = glm::mat4(1.0f);
+				}
+				BoneInfo bi;
+				bi.id = boneCount;
+				// offset is inverse bind matrix (mesh->bone space). We approximate with inverse of global bind
+				bi.offset = glm::inverse(globalBind);
+				boneInfoMap[boneName] = bi;
+				boneCount++;
+			}
+			m_Bones.push_back(Bone(channel->mNodeName.data, boneInfoMap[channel->mNodeName.data].id, channel));
+		}
+		m_BoneInfoMap = boneInfoMap;
+	}
+	
+	void ReadHierarchyData(AssimpNodeData& dest, const aiNode* src)
+	{
+		assert(src);
+
+		dest.name = src->mName.data;
+		dest.transformation = AssimpGLMHelpers::ConvertMatrixToGLMFormat(src->mTransformation);
+		dest.childrenCount = src->mNumChildren;
+
+		for (int i = 0; i < src->mNumChildren; i++)
+		{
+			AssimpNodeData newData;
+			ReadHierarchyData(newData, src->mChildren[i]);
+			dest.children.push_back(newData);
+		}
+	}
+
+	float m_Duration;
+	int m_TicksPerSecond;
+	std::vector<Bone> m_Bones;
+	AssimpNodeData m_RootNode;
+	std::map<std::string, BoneInfo> m_BoneInfoMap;
+};
+```
+
+ReadHierarchyData把aiNode的层级结构递归的读出来
+
+ReadMissingBones初始化boneInfo，填入id和offset
+offset是把mesh空间转换成bone空间的
+
+为什么需要层级结构？应为骨骼就是具有层级结构的，你动一下手臂手也要跟着一起动，所以骨骼的变换矩阵
+必须乘上父骨骼的变换矩阵
+
+接下来是animator类驱动动画，调用bone类插值每一帧
+
+```cpp
+#pragma once
+
+#include <glm/glm.hpp>
+#include <map>
+#include <vector>
+#include <assimp/scene.h>
+#include <assimp/Importer.hpp>
+#include "animation.h"
+#include "bone.h"
+
+class Animator
+{
+public:
+	Animator(Animation* animation)
+	{
+		m_CurrentTime = 0.0;
+		m_CurrentAnimation = animation;
+
+		m_FinalBoneMatrices.reserve(100);
+
+		for (int i = 0; i < 100; i++)
+			m_FinalBoneMatrices.push_back(glm::mat4(1.0f));
+	}
+
+	void UpdateAnimation(float dt)
+	{
+		m_DeltaTime = dt;
+		if (m_CurrentAnimation)
+		{
+			m_CurrentTime += m_CurrentAnimation->GetTicksPerSecond() * dt;
+			m_CurrentTime = fmod(m_CurrentTime, m_CurrentAnimation->GetDuration());
+			CalculateBoneTransform(&m_CurrentAnimation->GetRootNode(), glm::mat4(1.0f));
+		}
+	}
+
+	void PlayAnimation(Animation* pAnimation)
+	{
+		m_CurrentAnimation = pAnimation;
+		m_CurrentTime = 0.0f;
+	}
+
+	void CalculateBoneTransform(const AssimpNodeData* node, glm::mat4 parentTransform)
+	{
+		std::string nodeName = node->name;
+		glm::mat4 nodeTransform = node->transformation;
+
+		Bone* Bone = m_CurrentAnimation->FindBone(nodeName);
+
+		if (Bone)
+		{
+			Bone->Updata(m_CurrentTime);
+			nodeTransform = Bone->GetLocalTransform();
+		}
+
+		glm::mat4 globalTransformation = parentTransform * nodeTransform;
+
+		auto boneInfoMap = m_CurrentAnimation->GetBoneIdMap();
+		if (boneInfoMap.find(nodeName) != boneInfoMap.end())
+		{
+			int index = boneInfoMap[nodeName].id;
+			glm::mat4 offset = boneInfoMap[nodeName].offset;
+			m_FinalBoneMatrices[index] = globalTransformation * offset;
+		}
+
+		for (int i = 0; i < node->childrenCount; i++)
+			CalculateBoneTransform(&node->children[i], globalTransformation);
+	}
+
+	std::vector<glm::mat4> GetFinalBoneMatrices()
+	{
+		return m_FinalBoneMatrices;
+	}
+private:
+	std::vector<glm::mat4> m_FinalBoneMatrices;
+	Animation* m_CurrentAnimation;
+	float m_CurrentTime;
+	float m_DeltaTime;
+
+};
+```
+
+```cpp
+    if (Bone)
+		{
+			Bone->Updata(m_CurrentTime);
+			nodeTransform = Bone->GetLocalTransform();
+		}
+```
+
+这里调用bone类插值每一帧
+
+```cpp
+#pragma once
+
+#include <vector>
+#include <assimp/scene.h>
+#include <list>
+#include <glm/glm.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>
+#include "assimp_glm_helpers.h"
+
+struct KeyPosition
+{
+	glm::vec3 position;
+	float timeStamp;
+};
+
+struct KeyRotation
+{
+	glm::quat orientation;
+	float timeStamp;
+};
+
+struct KeyScale
+{
+	glm::vec3 scale;
+	float timeStamp;
+};
+
+class Bone
+{
+public:
+	Bone(const std::string& name, int ID, const aiNodeAnim* channel) : m_Name(name), m_ID(ID), m_LocalTransform(1.0f)
+	{
+		m_NumPositions = channel->mNumPositionKeys;
+
+		for (int positionIndex = 0; positionIndex < m_NumPositions; ++positionIndex)
+		{
+			aiVector3D aiPosition = channel->mPositionKeys[positionIndex].mValue;
+			float timeStamp = channel->mPositionKeys[positionIndex].mTime;
+			KeyPosition data;
+			data.position = AssimpGLMHelpers::GetGLMVec(aiPosition);
+			data.timeStamp = timeStamp;
+			m_Positions.push_back(data);
+
+		}
+
+		m_NumRotations = channel->mNumRotationKeys;
+		for (int rotationIndex = 0; rotationIndex < m_NumRotations; ++rotationIndex)
+		{
+			aiQuaternion aiOrientation = channel->mRotationKeys[rotationIndex].mValue;
+			float timeStamp = channel->mRotationKeys[rotationIndex].mTime;
+			KeyRotation data;
+			data.orientation = AssimpGLMHelpers::GetGLMQuat(aiOrientation);
+			data.timeStamp = timeStamp;
+			m_Rotations.push_back(data);
+		}
+
+		m_NumScalings = channel->mNumScalingKeys;
+		for (int keyIndex = 0; keyIndex < m_NumScalings; ++keyIndex)
+		{
+			aiVector3D scale = channel->mScalingKeys[keyIndex].mValue;
+			float timeStamp = channel->mScalingKeys[keyIndex].mTime;
+			KeyScale data;
+			data.scale = AssimpGLMHelpers::GetGLMVec(scale);
+			data.timeStamp = timeStamp;
+			m_Scales.push_back(data);
+		}
+	}
+
+	void Updata(float animationTime)
+	{
+		glm::mat4 translation = InterpolatePosition(animationTime);
+		glm::mat4 rotation = InterpolateRotation(animationTime);
+		glm::mat4 scale = InterpolateScaling(animationTime);
+		m_LocalTransform = translation * rotation * scale;
+	}
+
+	glm::mat4 GetLocalTransform() { return m_LocalTransform; }
+	std::string GetBoneName() const { return m_Name; }
+	int GetBoneID() { return m_ID; }
+
+	int GetPositionIndex(float animationTime)
+	{
+		for (int index = 0; index < m_NumPositions - 1; ++index)
+		{
+			if (animationTime < m_Positions[index + 1].timeStamp)
+				return index;
+		}
+		assert(0);
+	}
+
+	int GetRotationIndex(float animationTime)
+	{
+		for (int index = 0; index < m_NumRotations - 1; ++index)
+		{
+			if (animationTime < m_Rotations[index + 1].timeStamp)
+				return index;
+		}
+		assert(0);
+	}
+
+	int GetScaleIndex(float animationTime)
+	{
+		for (int index = 0; index < m_NumScalings - 1; ++index)
+		{
+			if (animationTime < m_Scales[index + 1].timeStamp)
+				return index;
+		}
+		assert(0);
+	}
+
+private:
+
+	float GetScaleFactor(float lastTimeStamp, float nextTimeStamp, float animationTime)
+	{
+		float scaleFactor = 0.0f;
+		float midWayLength = animationTime - lastTimeStamp;
+		float framesDiff = nextTimeStamp - lastTimeStamp;
+		scaleFactor = midWayLength / framesDiff;
+		return scaleFactor;
+	}
+
+	glm::mat4 InterpolatePosition(float animationTime)
+	{
+		if (1 == m_NumPositions)
+			return glm::translate(glm::mat4(1.0f), m_Positions[0].position);
+
+		int p0Index = GetPositionIndex(animationTime);
+		int p1Index = p0Index + 1;
+		float scaleFactor = GetScaleFactor(m_Positions[p0Index].timeStamp, m_Positions[p1Index].timeStamp, animationTime);
+		glm::vec3 finalPosition = glm::mix(m_Positions[p0Index].position, m_Positions[p1Index].position, scaleFactor);
+		return glm::translate(glm::mat4(1.0f), finalPosition);
+	}
+
+	glm::mat4 InterpolateRotation(float animationTime)
+	{
+		if (1 == m_NumRotations)
+		{
+			auto rotation = glm::normalize(m_Rotations[0].orientation);
+			return glm::toMat4(rotation);
+		}
+
+		int p0Index = GetRotationIndex(animationTime);
+		int p1Index = p0Index + 1;
+		float scaleFactor = GetScaleFactor(m_Rotations[p0Index].timeStamp, m_Rotations[p1Index].timeStamp, animationTime);
+		glm::quat finalRotation = glm::slerp(m_Rotations[p1Index].orientation, m_Rotations[p1Index].orientation, scaleFactor);
+		finalRotation = glm::normalize(finalRotation);
+		return glm::toMat4(finalRotation);
+	}
+
+	glm::mat4 InterpolateScaling(float animationTime)
+	{
+		if (1 == m_NumScalings)
+			return glm::scale(glm::mat4(1.0f), m_Scales[0].scale);
+		int p0Index = GetScaleIndex(animationTime);
+		int p1Index = p0Index + 1;
+		float scaleFactor = GetScaleFactor(m_Scales[p0Index].timeStamp, m_Scales[p1Index].timeStamp, animationTime);
+		glm::vec3 finalScale = glm::mix(m_Scales[p0Index].scale, m_Scales[p1Index].scale, scaleFactor);
+		return glm::scale(glm::mat4(1.0f), finalScale);
+	}
+
+	std::vector<KeyPosition> m_Positions;
+	std::vector<KeyRotation> m_Rotations;
+	std::vector<KeyScale> m_Scales;
+	int m_NumPositions;
+	int m_NumRotations;
+	int m_NumScalings;
+
+	glm::mat4 m_LocalTransform;
+	std::string m_Name;
+	int m_ID;
+};
+```
+
+先获得前后的关键帧位置
+
+```cpp
+int GetPositionIndex(float animationTime)
+	{
+		for (int index = 0; index < m_NumPositions - 1; ++index)
+		{
+			if (animationTime < m_Positions[index + 1].timeStamp)
+				return index;
+		}
+		assert(0);
+	}
+```
+
+在根据当前要插值的帧和前后关键帧的相对位置确定插值控制度factor开头讲过了
+
+```cpp
+	float GetScaleFactor(float lastTimeStamp, float nextTimeStamp, float animationTime)
+	{
+		float scaleFactor = 0.0f;
+		float midWayLength = animationTime - lastTimeStamp;
+		float framesDiff = nextTimeStamp - lastTimeStamp;
+		scaleFactor = midWayLength / framesDiff;
+		return scaleFactor;
+	}
+```
+
+再根据factor插值
+
+```cpp
+	glm::mat4 InterpolatePosition(float animationTime)
+	{
+		if (1 == m_NumPositions)
+			return glm::translate(glm::mat4(1.0f), m_Positions[0].position);
+
+		int p0Index = GetPositionIndex(animationTime);
+		int p1Index = p0Index + 1;
+		float scaleFactor = GetScaleFactor(m_Positions[p0Index].timeStamp, m_Positions[p1Index].timeStamp, animationTime);
+		glm::vec3 finalPosition = glm::mix(m_Positions[p0Index].position, m_Positions[p1Index].position, scaleFactor);
+		return glm::translate(glm::mat4(1.0f), finalPosition);
+	}
+```
+
+回到animator根据插值把骨骼的变换矩阵根据层次结构组织起来
+
+```cpp
+void CalculateBoneTransform(const AssimpNodeData* node, glm::mat4 parentTransform)
+{
+	std::string nodeName = node->name;
+	glm::mat4 nodeTransform = node->transformation;
+
+	Bone* Bone = m_CurrentAnimation->FindBone(nodeName);
+
+	if (Bone)
+	{
+		Bone->Updata(m_CurrentTime);
+		nodeTransform = Bone->GetLocalTransform();
+	}
+
+	glm::mat4 globalTransformation = parentTransform * nodeTransform;
+
+	auto boneInfoMap = m_CurrentAnimation->GetBoneIdMap();
+	if (boneInfoMap.find(nodeName) != boneInfoMap.end())
+	{
+		int index = boneInfoMap[nodeName].id;
+		glm::mat4 offset = boneInfoMap[nodeName].offset;
+		m_FinalBoneMatrices[index] = globalTransformation * offset;
+	}
+
+	for (int i = 0; i < node->childrenCount; i++)
+		CalculateBoneTransform(&node->children[i], globalTransformation);
+}
+```
+
+这样子`m_FinalBoneMatrices[index] = globalTransformation * offset;`就有了，我们的模型根据这个变换就能动了
+
+到了main函数里面把这个最终矩阵绑定到着色器
+
+```cpp
+auto transforms = animator.GetFinalBoneMatrices();
+for (int i = 0; i < transforms.size(); ++i)
+	ourShader.setMat4("finalBonesMatrices[" + std::to_string(i) + "]", transforms[i]);
+```
+
+现在看我们的顶点着色器
+
+```cpp
+#version 330 core
+
+layout (location = 0) in vec3 pos;
+layout (location = 1) in vec3 norm;
+layout (location = 2) in vec2 tex;
+layout (location = 3) in vec3 tangent;
+layout (location = 4) in vec3 bitangent;
+layout (location = 5) in ivec4 boneIds;
+layout (location = 6) in vec4 weights;
+
+uniform mat4 projection;
+uniform mat4 view;
+uniform mat4 model;
+
+const int MAX_BONES = 100;
+const int MAX_BONE_INFLUENCE = 4;
+uniform mat4 finalBonesMatrices[MAX_BONES];
+
+out vec2 TexCoords;
+
+void main()
+{
+	vec4 totalPosition = vec4(0.0f);
+	for (int i = 0; i < MAX_BONE_INFLUENCE; i++)
+	{
+		if (boneIds[i] == -1)
+			continue;
+		if (boneIds[i] >= MAX_BONES)
+		{
+			totalPosition = vec4(pos, 1.0f);
+			break;
+		}
+		vec4 localPosition = finalBonesMatrices[boneIds[i]] * vec4(pos, 1.0f);
+		totalPosition += localPosition * weights[i];
+		vec3 localNormal = mat3(finalBonesMatrices[boneIds[i]]) * norm;
+	}
+	mat4 viewModel = view * model;
+	gl_Position = projection * viewModel * totalPosition;
+	TexCoords = tex;
+}
+```
+
+前面说过每个顶点有相关的骨骼驱动，骨骼的变换矩阵也传进着色器了，那就对顶点应用这个矩阵，注意还要乘每个骨骼的权重，这样顶点就在骨骼的
+控制下动起来了！！！
+
+恭喜你！！！快点打开窗口看看你下载的模型动画吧！！！
+
+<p>第一章更新结束，为什么下一章要讲绑定骨骼呢，应为有些人可能觉得需要给模型设定自己的动画应用到自己的场景</p>
+<del>还有可能要小鸽一下，有个大佬给我发了点光追资料我去看看</del>
