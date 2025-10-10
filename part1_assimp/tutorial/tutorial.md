@@ -6,7 +6,7 @@
 
 2. 设置骨骼动画：把你想要的角色动画拆解成几个关键帧，你只需要在每个关键帧上给骨骼摆造型。比如一个走路的动画，你只需要设置：1抬前腿,伸左手2抬后腿，伸右手（实际上要设置大概8个关键帧让动作更流畅）的关键帧。这样关键帧变动->骨骼造型变动->模型变动
 
-3. 程序插值：在计算机程序中（建模软件或者opengl）实现：在每个关键帧中平滑地插入更多关键帧，让动画更流畅。
+3. 程序插值：在计算机程序中（建模软件或者opengl程序）实现：在每个关键帧中平滑地插入更多关键帧，让动画更流畅。
 
 <table align="center">
   <tr>
@@ -284,3 +284,149 @@ Mesh processMesh(aiMesh* mesh, const aiScene* scene)
 	return Mesh(vertices, indices, textures);
 }
 ```
+
+`GetGLMVec`是辅助函数把assimp组织的格式转换成glm格式，我们从aiMesh中读取每个顶点的位置，法线等，构造
+成我们的顶点类型扔进我们的mesh的顶点数组
+
+接下来我们处理材质信息：loadMaterialTextures会在aiMaterial里面查找对应类型的材质的相对路径
+这时候就可以根据路径判断是不是已经加载过该材质了：
+
+```cpp
+for (unsigned int j = 0; j < textures_loaded.size(); j++)
+{
+	if (std::strcmp(textures_loaded[j].path.data(), str.C_Str()) == 0)
+	{
+		textures.push_back(textures_loaded[j]);
+		skip = true;
+		break;
+	}
+}
+```
+
+如果不是我们就加载
+
+```cpp
+if (!skip)
+{
+	Texture texture;
+	texture.id = TextureFromFile(str.C_Str(), this->directory);
+	texture.type = typeName;
+	texture.path = str.C_Str();
+	textures.push_back(texture);
+	textures_loaded.push_back(texture);
+}
+
+unsigned int TextureFromFile(const char* path, const string& directory, bool gamma = false)
+{
+	string filename = string(path);
+	filename = directory + '/' + filename;
+
+	unsigned int textureID;
+	glGenTextures(1, &textureID);
+
+	int width, height, nrComponents;
+	unsigned char* data = stbi_load(filename.c_str(), &width, &height, &nrComponents, 0);
+	if (data)
+	{
+		GLenum format;
+		if (nrComponents == 1)
+			format = GL_RED;
+		else if (nrComponents == 3)
+			format = GL_RGB;
+		else if (nrComponents == 4)
+			format = GL_RGBA;
+
+		glBindTexture(GL_TEXTURE_2D, textureID);
+		glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+		glGenerateMipmap(GL_TEXTURE_2D);
+
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+		stbi_image_free(data);
+	}
+	else
+	{
+		std::cout << "Texture failed to load at path: " << path << std::endl;
+		stbi_image_free(data);
+	}
+
+	return textureID;
+}
+```
+
+这里我们使用一个叫stbi_load的工具加载，当然你用soil2加载也可以
+
+接下来就是关键，我们加载骨骼！
+
+```cpp
+void ExtractBoneWeightForVertices(std::vector<Vertex>& vertices, aiMesh* mesh, const aiScene* scene)
+{
+	auto& boneInfoMap = m_BoneInfoMap;
+	int& boneCount = m_BoneCounter;
+
+	for (int boneIndex = 0; boneIndex < mesh->mNumBones; ++boneIndex)
+	{
+		int boneID = -1;
+		std::string boneName = mesh->mBones[boneIndex]->mName.C_Str();
+		if (boneInfoMap.find(boneName) == boneInfoMap.end())
+		{
+			BoneInfo newBoneInfo;
+			newBoneInfo.id = boneCount;
+			newBoneInfo.offset = AssimpGLMHelpers::ConvertMatrixToGLMFormat(mesh->mBones[boneIndex]->mOffsetMatrix);
+			boneInfoMap[boneName] = newBoneInfo;
+			boneID = boneCount;
+			boneCount++;
+		}
+		else
+		{
+			boneID = boneInfoMap[boneName].id;
+		}
+		assert(boneID != -1);
+		auto weights = mesh->mBones[boneIndex]->mWeights;
+		int numWeights = mesh->mBones[boneIndex]->mNumWeights;
+
+		for (int weightIndex = 0; weightIndex < numWeights; ++weightIndex)
+		{
+			int vertexId = weights[weightIndex].mVertexId;
+			float weight = weights[weightIndex].mWeight;
+			assert(vertexId <= vertices.size());
+			SetVertexBoneData(vertices[vertexId], boneID, weight);
+		}
+	}
+
+}
+```
+
+我们遍历aimesh中的所有骨骼，如果发现还没有加载过就加载它。我们
+记录它的id并获得它的局部空间矩阵，
+它是把模型空间转换成骨骼空间的，你可以把他当做你平时用的模型矩阵
+
+我们在拿到骨骼所影响的顶点，和对该顶点的权重去填写刚才提到
+的顶点中的最后两个4个位置的数组
+
+```
+int m_BoneIDs[MAX_BONE_INFLUENCE];
+float m_Weights[MAX_BONE_INFLUENCE];
+```
+
+```cpp
+void SetVertexBoneData(Vertex& vertex, int boneID, float weight)
+{
+	for (int i = 0; i < MAX_BONE_INFLUENCE; i++)
+	{
+		if (vertex.m_BoneIDs[i] < 0)
+		{
+			vertex.m_Weights[i] = weight;
+			vertex.m_BoneIDs[i] = boneID;
+			break;
+		}
+	}
+}
+```
+
+好了现在模型和骨骼已经加载完毕了，我们要加载动画了！
+
+骨骼造型pose决定动画，我们先看骨骼
